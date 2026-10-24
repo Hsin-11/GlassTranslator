@@ -1,0 +1,11 @@
+Glass Translator 0.2.6 — محتوای بستهٔ کامل
+
+این پوشه شامل سورس کامل برنامه و ابزارهای نصب/تست/ساخت است.
+- سورس اصلی: main.py, ui.py, translator.py, ocr_worker.py, history.py, config.py
+- نصب و بررسی آفلاین: install_offline_model.py/.bat, check_offline_model.py/.bat
+- نصب وابستگی‌ها و اجرا: setup_windows.bat, run_windows.bat
+- ساخت اجرایی: GlassTranslator.spec, build_windows_exe.bat, README_BUILD_EXE_FA.md
+- تست‌ها: tests/, test_windows.bat
+- دارایی‌های تصویری: assets/glass_translator.ico, assets/glass_translator_icon.png
+
+پوشهٔ .venv، مدل‌های حجیم و فایل‌های خروجی build عمداً داخل سورس ZIP نیستند؛ با setup_windows.bat ساخته می‌شوند یا از پوشهٔ دادهٔ کاربر استفاده می‌کنند.
