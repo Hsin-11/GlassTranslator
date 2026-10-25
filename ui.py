@@ -10,12 +10,28 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QFormLayout, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizeGrip, QSlider,
+    QFormLayout, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel as _QtLabel,
+    QLineEdit as _QtLineEdit, QMessageBox, QPushButton, QScrollArea, QSizeGrip, QSlider,
     QSpinBox, QToolButton, QVBoxLayout, QWidget, QStyle, QListWidget, QListWidgetItem,
 )
 
 from config import MODE_NAMES, THEMES
+
+
+class QLabel(_QtLabel):
+    """Label with Persian-friendly right alignment by default."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+
+class QLineEdit(_QtLineEdit):
+    """Text input with right alignment by default; URL/English fields opt back to LTR."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAlignment(Qt.AlignmentFlag.AlignRight)
 
 
 ICON_PATHS: dict[str, str] = {
@@ -706,25 +722,30 @@ class SettingsDialog(QDialog):
         self.online_url = QLineEdit(str(self.settings.get("libretranslate_url", "")))
         self.online_url.setPlaceholderText("https://your-libretranslate-server/translate")
         self.online_url.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.online_url.setAlignment(Qt.AlignmentFlag.AlignLeft)
         form.addRow("نشانی API برای LibreTranslate", self.online_url)
 
         self.online_key = QLineEdit(str(self.settings.get("libretranslate_api_key", "")))
         self.online_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.online_key.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.online_key.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.online_key.setPlaceholderText("اختیاری")
         form.addRow("کلید API آنلاین", self.online_key)
 
         self.online_proxy = QLineEdit(str(self.settings.get("online_proxy", "")))
         self.online_proxy.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.online_proxy.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.online_proxy.setPlaceholderText("اختیاری؛ برای نمونه http://127.0.0.1:7890")
         form.addRow("پروکسی HTTP/HTTPS (اختیاری)", self.online_proxy)
 
         self.lmstudio_url = QLineEdit(str(self.settings.get("lmstudio_base_url", "http://127.0.0.1:1234/v1")))
         self.lmstudio_url.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.lmstudio_url.setAlignment(Qt.AlignmentFlag.AlignLeft)
         form.addRow("نشانی LM Studio", self.lmstudio_url)
 
         self.lmstudio_model = QLineEdit(str(self.settings.get("lmstudio_model", "")))
         self.lmstudio_model.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.lmstudio_model.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.lmstudio_model.setPlaceholderText("خالی باشد: مدل بارگذاری‌شده خودکار انتخاب می‌شود")
         form.addRow("شناسه مدل (اختیاری)", self.lmstudio_model)
 
@@ -1062,6 +1083,7 @@ class GlossaryDialog(QDialog):
         self.english_input = QLineEdit()
         self.english_input.setPlaceholderText("عبارت انگلیسی، مثل: Sites of Grace")
         self.english_input.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.english_input.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.english_input)
 
         self.persian_input = QLineEdit()

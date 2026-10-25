@@ -2,7 +2,7 @@
 """PyInstaller onedir build for Glass Translator on Windows x64.
 
 Build with the project's active .venv using: python -m PyInstaller --clean --noconfirm GlassTranslator.spec
-The Argos language model is intentionally kept in %APPDATA% and is not bundled.
+Model packages are staged by build_windows_exe.bat and bundled when found.
 """
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, copy_metadata
@@ -11,9 +11,20 @@ ROOT = Path(SPECPATH).resolve()
 ICON = ROOT / "assets" / "glass_translator.ico"
 
 datas = [(str(ROOT / "assets"), "assets")]
+# The Windows build script stages model files separately so the source repository
+# never needs to include large downloaded model weights.
+STAGE = ROOT / "build_staging"
+for staged_name, target_name in (
+    ("easyocr-models", "assets/easyocr-models"),
+    ("argos-packages", "assets/argos-packages"),
+):
+    staged_path = STAGE / staged_name
+    if staged_path.is_dir() and any(staged_path.iterdir()):
+        datas.append((str(staged_path), target_name))
+
 binaries = []
 hiddenimports = [
-    "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "PySide6.QtNetwork",
+    "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "PySide6.QtNetwork", "PySide6.QtSvg",
     "argostranslate", "argostranslate.package", "argostranslate.settings", "argostranslate.translate",
     "easyocr", "torch", "torchvision", "cv2", "numpy", "PIL",
     "mss", "mss.windows", "requests", "pynput", "pynput.keyboard._win32",

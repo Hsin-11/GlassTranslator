@@ -79,7 +79,7 @@ def _describe_installed_packages(argos_package) -> None:
 
 def _package_url_from_index() -> list[str]:
     """Read official public index directly; supports common index JSON shapes."""
-    response = requests.get(OFFICIAL_INDEX_URL, timeout=(10, 25), headers={"User-Agent": "GlassTranslator/0.2.6"})
+    response = requests.get(OFFICIAL_INDEX_URL, timeout=(10, 25), headers={"User-Agent": "GlassTranslator/0.2.7"})
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, dict):
@@ -178,7 +178,7 @@ def _download_model(urls: list[str]) -> Path:
                 url,
                 stream=True,
                 timeout=(15, 45),
-                headers={"User-Agent": "GlassTranslator/0.2.6"},
+                headers={"User-Agent": "GlassTranslator/0.2.7"},
             ) as response:
                 response.raise_for_status()
                 total = int(response.headers.get("Content-Length") or 0)

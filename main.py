@@ -6,7 +6,7 @@ from typing import Any
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer, Qt
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from config import MODE_NAMES, load_settings, save_settings, ensure_app_dir
@@ -21,6 +21,54 @@ def app_resource_path(relative_path: str) -> Path:
     frozen_root = getattr(sys, "_MEIPASS", None)
     base = Path(frozen_root) if frozen_root else Path(__file__).resolve().parent
     return base / relative_path
+
+
+
+
+def configure_application_appearance(app: QApplication) -> str:
+    """Configure a Persian-first RTL interface and load IRANSans when available."""
+    app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+    fonts_dir = app_resource_path("assets/fonts")
+    loaded_families: list[str] = []
+    if fonts_dir.is_dir():
+        for font_path in sorted(fonts_dir.iterdir()):
+            if font_path.suffix.lower() not in {".ttf", ".otf", ".ttc"}:
+                continue
+            font_id = QFontDatabase.addApplicationFont(str(font_path))
+            if font_id >= 0:
+                loaded_families.extend(QFontDatabase.applicationFontFamilies(font_id))
+
+    font_database = QFontDatabase()
+    available_families = list(font_database.families())
+    preferred_tokens = ("iransansx", "iransansweb", "iransans")
+
+    def normalized(name: str) -> str:
+        return "".join(ch for ch in name.casefold() if ch.isalnum())
+
+    font_family = ""
+    for token in preferred_tokens:
+        match = next((family for family in loaded_families if token in normalized(family)), None)
+        if match:
+            font_family = match
+            break
+    if not font_family:
+        for token in preferred_tokens:
+            match = next((family for family in available_families if token in normalized(family)), None)
+            if match:
+                font_family = match
+                break
+    if not font_family:
+        font_family = next((family for family in available_families if normalized(family) == "tahoma"), "")
+    if not font_family:
+        font_family = next((family for family in available_families if normalized(family) == "segoeui"), "Segoe UI")
+
+    app.setFont(QFont(font_family, 10))
+    # Qt's native message boxes do not use the QLabel subclass from ui.py.
+    app.setStyleSheet(
+        "QMessageBox QLabel { qproperty-alignment: AlignRight | AlignVCenter; }"
+    )
+    return font_family
 
 
 def enable_windows_dpi_awareness() -> None:
@@ -457,7 +505,8 @@ def main() -> int:
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setQuitOnLastWindowClosed(False)
-    app.setFont(QFont("Segoe UI", 10))
+    configure_application_appearance(app)
+    app.setApplicationVersion("0.2.7")
     controller = AppController(app)
     # Keep a strong reference while the tool-style windows are active.
     app._glass_translator_controller = controller  # type: ignore[attr-defined]

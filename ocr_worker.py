@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread, Signal
@@ -88,7 +90,17 @@ class OCRWorker(QThread):
             self.status_changed.emit(
                 "آماده‌سازی OCR روی GPU…" if use_gpu else "آماده‌سازی OCR روی CPU… (اولین اجرا ممکن است مدل را دریافت کند)"
             )
-            reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
+            runtime_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+            bundled_ocr_dir = runtime_root / "assets" / "easyocr-models"
+            detector_weights = bundled_ocr_dir / "craft_mlt_25k.pth"
+            recognizer_weights = bundled_ocr_dir / "english_g2.pth"
+            if detector_weights.is_file() and recognizer_weights.is_file():
+                reader = easyocr.Reader(
+                    ["en"], gpu=use_gpu, verbose=False,
+                    model_storage_directory=str(bundled_ocr_dir), download_enabled=False,
+                )
+            else:
+                reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
         except Exception as exc:
             self.fatal_error.emit(f"راه‌اندازی EasyOCR ناموفق بود: {exc}")
             return

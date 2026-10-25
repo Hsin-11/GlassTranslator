@@ -1,4 +1,4 @@
-Glass Translator 0.2.6 — محتوای بستهٔ کامل
+Glass Translator 0.2.7 — محتوای بستهٔ کامل
 
 این پوشه شامل سورس کامل برنامه و ابزارهای نصب/تست/ساخت است.
 - سورس اصلی: main.py, ui.py, translator.py, ocr_worker.py, history.py, config.py
@@ -9,3 +9,9 @@ Glass Translator 0.2.6 — محتوای بستهٔ کامل
 - دارایی‌های تصویری: assets/glass_translator.ico, assets/glass_translator_icon.png
 
 پوشهٔ .venv، مدل‌های حجیم و فایل‌های خروجی build عمداً داخل سورس ZIP نیستند؛ با setup_windows.bat ساخته می‌شوند یا از پوشهٔ دادهٔ کاربر استفاده می‌کنند.
+
+رابط راست‌به‌چپ: بله
+پشتیبانی فونت IRANSans از فایل assets/fonts یا فونت نصب‌شده: بله
+ساخت EXE روی ویندوز: build_windows_exe.bat
+حالت Portable: run_portable_windows.bat در پوشه خروجی
+GlassTranslator.iss — اسکریپت ساخت نصب‌کننده و حذف‌نصب استاندارد با Inno Setup 6

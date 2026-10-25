@@ -47,6 +47,10 @@ def _argos_candidate_package_dirs(argos_settings: Any | None = None) -> list[Pat
         value = os.environ.get(env_name, "").strip()
         if value:
             candidates.append(Path(value).expanduser())
+    runtime_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    bundled_argos_root = runtime_root / "assets" / "argos-packages"
+    if bundled_argos_root.is_dir():
+        candidates.append(bundled_argos_root)
     candidates.extend([
         appdata / "GlassTranslator" / "argos-packages",
         appdata / "argos-translate" / "packages",
@@ -193,7 +197,7 @@ def _translate_google_web(text: str, settings: dict[str, Any] | None = None) -> 
         response = requests.get(
             "https://translate.googleapis.com/translate_a/single",
             params={"client": "gtx", "sl": "en", "tl": "fa", "dt": "t", "q": text},
-            headers={"User-Agent": "Mozilla/5.0 GlassTranslator/0.2.6"},
+            headers={"User-Agent": "Mozilla/5.0 GlassTranslator/0.2.7"},
             timeout=(5, 20),
             **_proxy_kwargs(settings),
         )

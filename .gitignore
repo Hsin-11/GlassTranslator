@@ -5,3 +5,11 @@ build/
 dist/
 *.log
 GlassTranslator_Windows_x64.zip
+build_staging/
+assets/argos-packages/
+assets/easyocr-models/
+GlassTranslator_Windows_x64_v*.zip
+installer_output/
+assets/fonts/*.ttf
+assets/fonts/*.otf
+assets/fonts/*.ttc

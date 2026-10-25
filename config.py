@@ -8,7 +8,14 @@ from typing import Any
 
 APP_NAME = "GlassTranslator"
 
-if sys.platform == "win32":
+if os.environ.get("GLASSTRANSLATOR_PORTABLE", "").strip() == "1":
+    # Portable launcher sets this flag so settings/history stay beside the executable.
+    if getattr(sys, "frozen", False):
+        _portable_root = Path(sys.executable).resolve().parent
+    else:
+        _portable_root = Path(__file__).resolve().parent
+    BASE_DIR = _portable_root / "data"
+elif sys.platform == "win32":
     BASE_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 else:
     BASE_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / APP_NAME
