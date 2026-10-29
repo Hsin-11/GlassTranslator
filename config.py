@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import sys
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 APP_NAME = "GlassTranslator"
 
 if os.environ.get("GLASSTRANSLATOR_PORTABLE", "").strip() == "1":
-    # Portable launcher sets this flag so settings/history stay beside the executable.
+    # Portable launcher keeps settings/history beside the executable.
     if getattr(sys, "frozen", False):
         _portable_root = Path(sys.executable).resolve().parent
     else:
@@ -25,9 +26,10 @@ HISTORY_DB_PATH = BASE_DIR / "history.sqlite3"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "mode": "local",
-    "theme": "Ivory Glass",
+    "theme": "روشن",
     "toolbar_orientation": "horizontal",
-    "toolbar_style": "light",
+    # The toolbar follows the application theme; retained for migration compatibility.
+    "toolbar_style": "theme",
     "toolbar_x": 60,
     "toolbar_y": 70,
     "overlay_x": None,
@@ -43,9 +45,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "glossary": {},
     "history_persistent": False,
     "online_provider": "google",
-    "libretranslate_url": "",
     "online_proxy": "",
-    "libretranslate_api_key": "",
     "lmstudio_base_url": "http://127.0.0.1:1234/v1",
     "lmstudio_model": "",
     "offline_source": "en",
@@ -53,36 +53,38 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 THEMES: dict[str, dict[str, str]] = {
-    "Ivory Glass": {
-        "background": "#F0F0ED", "panel": "#FFFFFF", "text": "#171717",
-        "muted": "#646464", "border": "#292929", "separator": "#D8D8D4",
-        "toolbar": "#FFFFFF", "accent": "#343434",
+    "روشن": {
+        "background": "#F5F7FA",
+        "panel": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#687180",
+        "border": "#D7DDE5",
+        "separator": "#E7EBF0",
+        "toolbar": "#FFFFFF",
+        "accent": "#356AE6",
     },
-    "Obsidian": {
-        "background": "#141619", "panel": "#202328", "text": "#F3F3F3",
-        "muted": "#B0B5BD", "border": "#60656D", "separator": "#41464E",
-        "toolbar": "#202328", "accent": "#E5E5E5",
+    "تاریک": {
+        "background": "#171A20",
+        "panel": "#222731",
+        "text": "#F1F4F8",
+        "muted": "#A6AFBD",
+        "border": "#414957",
+        "separator": "#333A46",
+        "toolbar": "#222731",
+        "accent": "#8BAEFF",
     },
-    "Arctic Glass": {
-        "background": "#E8EDF0", "panel": "#F6F9FA", "text": "#203443",
-        "muted": "#647987", "border": "#526C7C", "separator": "#CFD9DF",
-        "toolbar": "#F6F9FA", "accent": "#315064",
-    },
-    "Forest Glass": {
-        "background": "#17201E", "panel": "#222E29", "text": "#E1E9E3",
-        "muted": "#A8C3B2", "border": "#6B8C79", "separator": "#46594E",
-        "toolbar": "#222E29", "accent": "#B6D1C0",
-    },
-    "Amethyst Glass": {
-        "background": "#F1EAF3", "panel": "#F8F3FA", "text": "#3D2B47",
-        "muted": "#856D90", "border": "#72547F", "separator": "#D9C8E0",
-        "toolbar": "#F8F3FA", "accent": "#72547F",
-    },
-    "Warm Sand": {
-        "background": "#EDE7DD", "panel": "#F7F2EA", "text": "#3D342C",
-        "muted": "#837466", "border": "#766859", "separator": "#D8CEC0",
-        "toolbar": "#F7F2EA", "accent": "#766859",
-    },
+}
+
+# Old settings files used six theme names. Map them to the closest of the two supported modes.
+_THEME_MIGRATIONS = {
+    "light": "روشن",
+    "dark": "تاریک",
+    "ivory glass": "روشن",
+    "arctic glass": "روشن",
+    "amethyst glass": "روشن",
+    "warm sand": "روشن",
+    "obsidian": "تاریک",
+    "forest glass": "تاریک",
 }
 
 MODE_NAMES = {
@@ -93,7 +95,10 @@ MODE_NAMES = {
 
 
 def load_settings() -> dict[str, Any]:
-    settings = DEFAULT_SETTINGS.copy()
+    # Nested defaults (notably ``glossary``) must not be shared between calls.
+    # Otherwise a caller mutating one loaded settings object can silently mutate
+    # the defaults used by later loads in the same process.
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
     try:
         if SETTINGS_PATH.exists():
             loaded = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -102,17 +107,41 @@ def load_settings() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         pass
 
-    if settings.get("theme") not in THEMES:
-        settings["theme"] = DEFAULT_SETTINGS["theme"]
+    theme = str(settings.get("theme", DEFAULT_SETTINGS["theme"])).strip()
+    if theme not in THEMES:
+        settings["theme"] = _THEME_MIGRATIONS.get(theme.casefold(), DEFAULT_SETTINGS["theme"])
+    # Old installations used an independent toolbar appearance. The professional UI now
+    # keeps the toolbar synchronized with the selected application theme.
+    settings["toolbar_style"] = "theme"
     if settings.get("mode") not in MODE_NAMES:
         settings["mode"] = DEFAULT_SETTINGS["mode"]
+    # This release intentionally exposes Google Translate as the only online provider.
+    settings["online_provider"] = "google"
+    for retired_key in (
+        "libretranslate_url", "libretranslate_api_key",
+        "microsoft_translator_endpoint", "microsoft_translator_key",
+        "microsoft_translator_region",
+    ):
+        settings.pop(retired_key, None)
     return settings
 
 
 def save_settings(settings: dict[str, Any]) -> None:
     BASE_DIR.mkdir(parents=True, exist_ok=True)
+    normalized = dict(settings)
+    theme = str(normalized.get("theme", DEFAULT_SETTINGS["theme"])).strip()
+    if theme not in THEMES:
+        normalized["theme"] = _THEME_MIGRATIONS.get(theme.casefold(), DEFAULT_SETTINGS["theme"])
+    normalized["toolbar_style"] = "theme"
+    normalized["online_provider"] = "google"
+    for retired_key in (
+        "libretranslate_url", "libretranslate_api_key",
+        "microsoft_translator_endpoint", "microsoft_translator_key",
+        "microsoft_translator_region",
+    ):
+        normalized.pop(retired_key, None)
     temp_path = SETTINGS_PATH.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     temp_path.replace(SETTINGS_PATH)
 
 

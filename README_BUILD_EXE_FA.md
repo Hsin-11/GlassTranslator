@@ -1,4 +1,4 @@
-# راهنمای ساخت EXE — Glass Translator 0.2.7
+# راهنمای ساخت EXE — Glass Translator 0.2.10
 
 ## نکتهٔ مهم
 
@@ -16,8 +16,8 @@
 
 - `dist\GlassTranslator\GlassTranslator.exe` — فایل اجرایی
 - `dist\GlassTranslator\` — پوشهٔ کامل برنامه و وابستگی‌ها
-- `GlassTranslator_Windows_x64_v0.2.7.zip` — بستهٔ قابل‌انتقال خروجی
-- `installer_output\GlassTranslator_Setup_x64_v0.2.7.exe` — نصب‌کنندهٔ ویندوز با حذف‌نصب استاندارد، اگر Inno Setup 6 نصب باشد
+- `GlassTranslator_Windows_x64_v0.2.10.zip` — بستهٔ قابل‌انتقال خروجی
+- `installer_output\GlassTranslator_Setup_x64_v0.2.10.exe` — نصب‌کنندهٔ ویندوز با حذف‌نصب استاندارد، اگر Inno Setup 6 نصب باشد
 - `dist\GlassTranslator\run_portable_windows.bat` — راه‌اندازی با تنظیمات و تاریخچه کنار برنامه
 
 پوشهٔ کامل خروجی را نگه دار؛ در حالت `onedir` فقط کپی‌کردن EXE کافی نیست. برای حالت Portable، پوشه را در مسیری قابل‌نوشتن مانند دسکتاپ یا فلش استخراج کن و `run_portable_windows.bat` را اجرا کن.

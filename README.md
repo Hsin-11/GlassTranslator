@@ -1,4 +1,4 @@
-# Glass Translator 0.2.7
+# Glass Translator 0.2.10
 
 Glass Translator is a floating Windows screen translator that uses OCR to read English text from a selected screen region and displays a Persian translation.
 
@@ -7,10 +7,10 @@ Glass Translator is a floating Windows screen translator that uses OCR to read E
 - Persian-first right-to-left interface with right-aligned Persian labels and inputs.
 - IRANSans / IRANSansX / IRANSansWeb font detection from Windows-installed fonts or `assets/fonts`.
 - EasyOCR screen-region recognition.
-- Online translation through Google Translate's unofficial web endpoint or a LibreTranslate-compatible API.
+- Online translation through Google Translate's unofficial web endpoint (the only online provider exposed in the UI).
 - Local AI translation through LM Studio's OpenAI-compatible local server.
 - Offline English-to-Persian translation through Argos Translate.
-- Translation history, search, glossary, themes, and global hotkeys.
+- Translation history, search, glossary, unified light/dark themes, a bounded de-duplicating translation queue, and global hotkeys including `Ctrl+Shift+D` to switch themes instantly.
 
 ## Run from source
 

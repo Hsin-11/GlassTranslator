@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import sys
 import re
+import json
+import hashlib
+from collections import deque
 from typing import Any
 from pathlib import Path
 
@@ -9,7 +12,7 @@ from PySide6.QtCore import QObject, QThread, Signal, QTimer, Qt
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
-from config import MODE_NAMES, load_settings, save_settings, ensure_app_dir
+from config import MODE_NAMES, THEMES, load_settings, save_settings, ensure_app_dir
 from history import HistoryManager
 from ocr_worker import OCRWorker
 from translator import TranslationError, translate_text
@@ -25,8 +28,38 @@ def app_resource_path(relative_path: str) -> Path:
 
 
 
-def configure_application_appearance(app: QApplication) -> str:
-    """Configure a Persian-first RTL interface and load IRANSans when available."""
+def apply_application_palette(app: QApplication, settings: dict[str, Any] | None = None) -> None:
+    """Apply one consistent light/dark palette to native Qt controls and menus."""
+    from PySide6.QtGui import QPalette, QColor
+
+    app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    selected_theme = (settings or {}).get("theme", "روشن")
+    theme = THEMES.get(selected_theme, THEMES["روشن"])
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(theme["background"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(theme["panel"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(theme["background"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.Button, QColor(theme["panel"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(theme["accent"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF" if selected_theme == "روشن" else "#171A20"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(theme["panel"]))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(theme["text"]))
+    app.setPalette(palette)
+    # Native controls and message boxes inherit the same theme as custom windows.
+    app.setStyleSheet(f"""
+        QMessageBox {{ background: {theme['background']}; color: {theme['text']}; }}
+        QMessageBox QLabel {{ color: {theme['text']}; qproperty-alignment: AlignRight | AlignVCenter; }}
+        QMenu {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; }}
+        QMenu::item:selected {{ background: {theme['separator']}; }}
+    """)
+
+
+def configure_application_appearance(app: QApplication, settings: dict[str, Any] | None = None) -> str:
+    """Configure a Persian-first RTL interface and load the preferred Persian font."""
+    apply_application_palette(app, settings)
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
     fonts_dir = app_resource_path("assets/fonts")
@@ -64,10 +97,6 @@ def configure_application_appearance(app: QApplication) -> str:
         font_family = next((family for family in available_families if normalized(family) == "segoeui"), "Segoe UI")
 
     app.setFont(QFont(font_family, 10))
-    # Qt's native message boxes do not use the QLabel subclass from ui.py.
-    app.setStyleSheet(
-        "QMessageBox QLabel { qproperty-alignment: AlignRight | AlignVCenter; }"
-    )
     return font_family
 
 
@@ -137,6 +166,8 @@ class HotkeyBridge(QObject):
 
 
 class AppController(QObject):
+    MAX_TRANSLATION_QUEUE = 16
+
     def __init__(self, app: QApplication) -> None:
         super().__init__()
         self.app = app
@@ -152,12 +183,17 @@ class AppController(QObject):
         self.translation_threads: list[TranslationThread] = []
         self.connection_test_threads: list[ConnectionTestThread] = []
         self.translation_busy = False
-        self.pending_translation: tuple[str, dict[str, Any], str] | None = None
+        self.translation_queue: deque[tuple[str, dict[str, Any], str]] = deque()
+        self.queued_translation_keys: set[tuple[str, str]] = set()
+        self.active_translation: tuple[str, dict[str, Any], str] | None = None
+        self.active_translation_key: tuple[str, str] | None = None
+        self.latest_requested_key: tuple[str, str] | None = None
+        # Runtime cache keys include the engine/profile to avoid returning a translation
+        # produced by a different online provider or local model for the same source text.
         self.translation_cache: dict[tuple[str, str], str] = {}
-        for entry in self.history.items:
-            self.translation_cache[(str(entry.get("mode", "local")), normalize(str(entry.get("original", ""))))] = str(entry.get("translated", ""))
         self.overlay_enabled = False
         self.history_dialog: HistoryDialog | None = None
+        self.settings_dialog: SettingsDialog | None = None
         self.hotkey_listener = None
         self.hotkey_bridge = HotkeyBridge(self)
         self.hotkey_bridge.action.connect(self._handle_hotkey)
@@ -184,6 +220,7 @@ class AppController(QObject):
         self.toolbar.overlay_toggled.connect(self.toggle_overlay)
         self.toolbar.history_requested.connect(self.show_history)
         self.toolbar.mode_cycle_requested.connect(self.cycle_mode)
+        self.toolbar.theme_toggled.connect(self.toggle_theme)
         self.toolbar.settings_requested.connect(self.show_settings)
         self.toolbar.quit_requested.connect(self.quit_app)
         self.overlay.hide_button.clicked.connect(self._overlay_hidden_from_panel)
@@ -196,6 +233,7 @@ class AppController(QObject):
                 "<ctrl>+<shift>+t": lambda: self.hotkey_bridge.action.emit("overlay"),
                 "<ctrl>+<shift>+r": lambda: self.hotkey_bridge.action.emit("capture"),
                 "<ctrl>+<shift>+h": lambda: self.hotkey_bridge.action.emit("history"),
+                "<ctrl>+<shift>+d": lambda: self.hotkey_bridge.action.emit("theme"),
             })
             self.hotkey_listener.start()
         except Exception:
@@ -208,6 +246,8 @@ class AppController(QObject):
             self.toggle_capture()
         elif action == "history":
             self.show_history()
+        elif action == "theme":
+            self.toggle_theme()
 
     def _refresh_mode_tooltip(self) -> None:
         self.toolbar.apply_settings(self.settings)
@@ -224,7 +264,7 @@ class AppController(QObject):
             QMessageBox.warning(None, "انتخاب محدوده", "صفحه‌نمایش قابل دسترسی نیست.")
             return
         self.toolbar.hide()
-        selector = RegionSelector(screen.geometry())
+        selector = RegionSelector(screen.geometry(), str(self.settings.get("theme", "روشن")))
         selector.region_selected.connect(self._region_selected)
         selector.cancelled.connect(self._region_cancelled)
         self.region_selector = selector
@@ -315,11 +355,30 @@ class AppController(QObject):
         else:
             self.overlay.set_status(f"موتور: {mode_name}")
 
+    def toggle_theme(self) -> None:
+        """Switch the entire app between light and dark without restarting OCR."""
+        self.settings["theme"] = "تاریک" if self.settings.get("theme", "روشن") == "روشن" else "روشن"
+        apply_application_palette(self.app, self.settings)
+        save_settings(self.settings)
+        self.toolbar.apply_settings(self.settings)
+        self.overlay.apply_settings(self.settings)
+        if self.region_selector is not None:
+            self.region_selector.theme = THEMES[self.settings["theme"]]
+            self.region_selector.update()
+        if self.history_dialog is not None:
+            self.history_dialog.apply_settings(self.settings)
+        if self.settings_dialog is not None and self.settings_dialog.isVisible():
+            self.settings_dialog.settings["theme"] = self.settings["theme"]
+            self.settings_dialog._apply_theme_style()
+
     def cycle_mode(self) -> None:
         modes = ["online", "local", "offline"]
         current = self.settings.get("mode", "local")
         index = modes.index(current) if current in modes else 0
         self.settings["mode"] = modes[(index + 1) % len(modes)]
+        self.translation_queue.clear()
+        self.queued_translation_keys.clear()
+        self.latest_requested_key = None
         save_settings(self.settings)
         self.toolbar.apply_settings(self.settings)
         self._refresh_overlay_after_mode_change()
@@ -327,10 +386,12 @@ class AppController(QObject):
 
     def show_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self.toolbar)
+        self.settings_dialog = dialog
         dialog.settings_saved.connect(self._apply_settings)
         dialog.glossary_changed.connect(self._apply_glossary)
         dialog.test_connection_requested.connect(lambda settings, target=dialog: self._test_connection(settings, target))
         dialog.exec()
+        self.settings_dialog = None
 
     def _test_connection(self, settings: dict[str, Any], dialog: SettingsDialog) -> None:
         thread = ConnectionTestThread(settings, self)
@@ -355,7 +416,14 @@ class AppController(QObject):
         settings["overlay_y"] = self.overlay.y()
         settings["overlay_width"] = self.overlay.width()
         settings["overlay_height"] = self.overlay.height()
+        old_translation_profile = self._translation_profile(self.settings)
         self.settings.update(settings)
+        if "theme" in settings:
+            apply_application_palette(self.app, self.settings)
+        if old_translation_profile != self._translation_profile(self.settings):
+            self.translation_queue.clear()
+            self.queued_translation_keys.clear()
+            self.latest_requested_key = None
         save_settings(self.settings)
         if was_persistent != bool(self.settings.get("history_persistent", False)):
             self.history.set_persistent(bool(self.settings.get("history_persistent", False)))
@@ -378,7 +446,12 @@ class AppController(QObject):
             self.start_capture()
 
     def _apply_glossary(self, glossary: dict[str, str]) -> None:
+        old_profile = self._translation_profile(self.settings)
         self.settings["glossary"] = dict(glossary)
+        if old_profile != self._translation_profile(self.settings):
+            self.translation_queue.clear()
+            self.queued_translation_keys.clear()
+            self.latest_requested_key = None
         save_settings(self.settings)
 
     def show_history(self) -> None:
@@ -402,29 +475,98 @@ class AppController(QObject):
             parts.extend(f"EN: {entry['original']}\nFA: {entry['translated']}" for entry in recent)
         return "\n".join(parts)
 
+    @staticmethod
+    def _translation_profile(settings: dict[str, Any]) -> str:
+        """Stable, non-secret cache namespace for the selected translation configuration."""
+        mode = str(settings.get("mode", "local"))
+        profile: dict[str, Any] = {"mode": mode}
+        if mode == "online":
+            provider = str(settings.get("online_provider", "google")).lower()
+            profile["provider"] = provider
+            if provider in {"libre", "libretranslate", "libre_translate"}:
+                profile["endpoint"] = str(settings.get("libretranslate_url", "")).strip().rstrip("/")
+            elif provider in {"microsoft", "microsoft_translator", "azure_translator", "azure"}:
+                profile["endpoint"] = str(settings.get("microsoft_translator_endpoint", "")).strip().rstrip("/")
+                profile["region"] = str(settings.get("microsoft_translator_region", "")).strip().lower()
+            profile["source"] = "en"
+            profile["target"] = "fa"
+        elif mode == "offline":
+            profile["source"] = str(settings.get("offline_source", "en"))
+            profile["target"] = str(settings.get("offline_target", "fa"))
+        else:
+            profile["endpoint"] = str(settings.get("lmstudio_base_url", "")).strip().rstrip("/")
+            profile["model"] = str(settings.get("lmstudio_model", "")).strip()
+            glossary = settings.get("glossary", {})
+            if isinstance(glossary, dict):
+                profile["glossary_hash"] = hashlib.sha256(
+                    json.dumps(glossary, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                ).hexdigest()[:16]
+        return json.dumps(profile, ensure_ascii=False, sort_keys=True)
+
+    @classmethod
+    def _cache_key(cls, text: str, settings: dict[str, Any]) -> tuple[str, str]:
+        return cls._translation_profile(settings), normalize(text)
+
+    def _display_cached_translation(self, original: str, translated: str) -> None:
+        self.overlay.set_translation(original, translated, "از حافظه ترجمه")
+        if self.overlay_enabled:
+            self.overlay.show()
+            self.overlay.raise_()
+
     def _on_text_detected(self, text: str) -> None:
         text = text.strip()
         if not text:
             return
-        mode = str(self.settings.get("mode", "local"))
-        key = (mode, normalize(text))
-        if self.translation_busy:
-            # Keep the newest changed subtitle, even when it is already cached; it must be shown after the current request.
-            self.pending_translation = (text, self.settings.copy(), self._context_for_translation())
+        settings = self.settings.copy()
+        context = self._context_for_translation()
+        key = self._cache_key(text, settings)
+        self.latest_requested_key = key
+
+        # If this exact item is being translated or is already queued, don't duplicate it.
+        if key == self.active_translation_key or key in self.queued_translation_keys:
+            return
+        cached = self.translation_cache.get(key)
+        if cached is not None:
+            self._display_cached_translation(text, cached)
             return
 
-        if key in self.translation_cache:
-            self.overlay.set_translation(text, self.translation_cache[key], "از حافظه ترجمه")
-            if self.overlay_enabled:
-                self.overlay.show()
-                self.overlay.raise_()
+        if len(self.translation_queue) >= self.MAX_TRANSLATION_QUEUE:
+            dropped_text, dropped_settings, _dropped_context = self.translation_queue.popleft()
+            self.queued_translation_keys.discard(self._cache_key(dropped_text, dropped_settings))
+
+        self.translation_queue.append((text, settings, context))
+        self.queued_translation_keys.add(key)
+        if self.translation_busy:
+            self.overlay.set_status(f"در حال ترجمه · {len(self.translation_queue)} متن در صف")
+        else:
+            self._process_translation_queue()
+
+    def _process_translation_queue(self) -> None:
+        if self.translation_busy:
             return
-        self._start_translation(text, self.settings.copy(), self._context_for_translation())
+        while self.translation_queue:
+            task = self.translation_queue.popleft()
+            text, settings, context = task
+            key = self._cache_key(text, settings)
+            self.queued_translation_keys.discard(key)
+            cached = self.translation_cache.get(key)
+            if cached is not None:
+                if key == self.latest_requested_key:
+                    self._display_cached_translation(text, cached)
+                continue
+            self._start_translation(text, settings, context)
+            return
 
     def _start_translation(self, text: str, settings: dict[str, Any], context: str) -> None:
         self.translation_busy = True
+        self.active_translation = (text, settings.copy(), context)
+        self.active_translation_key = self._cache_key(text, settings)
         mode = str(settings.get("mode", "local"))
-        self.overlay.set_translation(text, "در حال ترجمه…", f"{MODE_NAMES.get(mode, mode)} · در حال پردازش")
+        queued_count = len(self.translation_queue)
+        status = f"{MODE_NAMES.get(mode, mode)} · در حال پردازش"
+        if queued_count:
+            status += f" · {queued_count} در صف"
+        self.overlay.set_translation(text, "در حال ترجمه…", status)
         if self.overlay_enabled:
             self.overlay.show()
             self.overlay.raise_()
@@ -435,27 +577,31 @@ class AppController(QObject):
         thread.start()
 
     def _on_translation_result(self, original: str, translated: str, mode: str, error_flag: str) -> None:
+        task = self.active_translation
+        task_settings = task[1] if task is not None else self.settings.copy()
+        key = self._cache_key(original, task_settings)
+        is_latest = key == self.latest_requested_key
         if error_flag:
-            self.overlay.set_translation(original, translated, f"خطا · {MODE_NAMES.get(mode, mode)}")
-            # Do not persist operational errors as translations.
+            if is_latest:
+                self.overlay.set_translation(original, translated, f"خطا · {MODE_NAMES.get(mode, mode)}")
+            # Never cache or persist transient service/network errors as translations.
         else:
-            self.translation_cache[(mode, normalize(original))] = translated
+            self.translation_cache[key] = translated
+            if len(self.translation_cache) > 2000:
+                self.translation_cache.pop(next(iter(self.translation_cache)))
             self.history.add(original, translated, mode)
-            self.overlay.set_translation(original, translated, f"ترجمه آماده · {MODE_NAMES.get(mode, mode)}")
+            if is_latest:
+                self.overlay.set_translation(original, translated, f"ترجمه آماده · {MODE_NAMES.get(mode, mode)}")
             if self.history_dialog is not None and self.history_dialog.isVisible():
                 self.history_dialog.refresh()
-        if self.overlay_enabled:
+        if is_latest and self.overlay_enabled:
             self.overlay.show()
             self.overlay.raise_()
         self.translation_busy = False
-        pending = self.pending_translation
-        self.pending_translation = None
-        if pending is not None and normalize(pending[0]) != normalize(original):
-            pending_key = (pending[1].get("mode", "local"), normalize(pending[0]))
-            if pending_key in self.translation_cache:
-                self.overlay.set_translation(pending[0], self.translation_cache[pending_key], "از حافظه ترجمه")
-            else:
-                self._start_translation(*pending)
+        self.active_translation = None
+        self.active_translation_key = None
+        # Schedule the next item after this worker has returned from its result signal.
+        QTimer.singleShot(0, self._process_translation_queue)
 
     def _cleanup_translation_thread(self, thread: TranslationThread) -> None:
         if thread in self.translation_threads:
@@ -505,8 +651,9 @@ def main() -> int:
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setQuitOnLastWindowClosed(False)
-    configure_application_appearance(app)
-    app.setApplicationVersion("0.2.7")
+    initial_settings = load_settings()
+    configure_application_appearance(app, initial_settings)
+    app.setApplicationVersion("0.2.10")
     controller = AppController(app)
     # Keep a strong reference while the tool-style windows are active.
     app._glass_translator_controller = controller  # type: ignore[attr-defined]

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import threading
 import time
+from urllib.parse import urlsplit, urlunsplit
 import requests
 
 # Keep model installation and discovery on one persistent directory. Argos
@@ -175,6 +176,8 @@ def _translate_online(text: str, settings: dict[str, Any]) -> str:
     provider = str(settings.get("online_provider", "google")).strip().lower()
     if provider in {"google", "google_translate", "google-translate"}:
         return _translate_google_web(text, settings)
+    if provider in {"microsoft", "microsoft_translator", "azure_translator", "azure"}:
+        return _translate_microsoft_translator(text, settings)
     if provider in {"libre", "libretranslate", "libre_translate"}:
         return _translate_libretranslate(text, settings)
     raise TranslationError("سرویس آنلاین انتخاب‌شده شناخته‌شده نیست. تنظیمات موتور آنلاین را بررسی کن.")
@@ -197,7 +200,7 @@ def _translate_google_web(text: str, settings: dict[str, Any] | None = None) -> 
         response = requests.get(
             "https://translate.googleapis.com/translate_a/single",
             params={"client": "gtx", "sl": "en", "tl": "fa", "dt": "t", "q": text},
-            headers={"User-Agent": "Mozilla/5.0 GlassTranslator/0.2.7"},
+            headers={"User-Agent": "Mozilla/5.0 GlassTranslator/0.2.10"},
             timeout=(5, 20),
             **_proxy_kwargs(settings),
         )
@@ -213,7 +216,7 @@ def _translate_google_web(text: str, settings: dict[str, Any] | None = None) -> 
             raise TranslationError(
                 "سرویس Google Translate درخواست‌ها را محدود کرده است (HTTP 429: Too Many Requests)."
                 " این خطا الزاماً به معنی قطع اینترنت نیست. کمی صبر کن و دوباره امتحان کن؛ اگر ادامه داشت، "
-                "ارائه‌دهنده آنلاین را به یک سرور LibreTranslate قابل‌دسترسی تغییر بده یا از Local AI استفاده کن."
+                "در صورت ادامه خطا، موقتاً از موتور Local AI یا Offline استفاده کن."
                 f"{retry_hint}"
             ) from exc
         raise TranslationError(
@@ -236,6 +239,99 @@ def _translate_google_web(text: str, settings: dict[str, Any] | None = None) -> 
     if not result.strip():
         raise TranslationError("مترجم آنلاین Google پاسخ خالی برگرداند.")
     return result.strip()
+
+
+def _microsoft_translator_url(endpoint: str) -> str:
+    """Normalize a global Azure Translator endpoint or a custom Azure resource endpoint."""
+    endpoint = (endpoint or "https://api.cognitive.microsofttranslator.com").strip()
+    if not endpoint:
+        endpoint = "https://api.cognitive.microsofttranslator.com"
+    # Accept a host/base URL or a fully specified endpoint copied from Azure portal/docs.
+    # Query parameters are passed separately so api-version/from/to cannot be duplicated.
+    parts = urlsplit(endpoint)
+    if parts.scheme and parts.netloc:
+        endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")).rstrip("/")
+    else:
+        endpoint = endpoint.split("?", 1)[0].rstrip("/")
+    if endpoint.endswith("/translate"):
+        return endpoint
+    if ".cognitiveservices.azure.com" in endpoint.lower():
+        if "/translator/text/v3.0" in endpoint.lower():
+            return endpoint + "/translate"
+        return endpoint + "/translator/text/v3.0/translate"
+    return endpoint + "/translate"
+
+
+def _translate_microsoft_translator(text: str, settings: dict[str, Any]) -> str:
+    """Translate English to Persian through the Azure Translator Text v3 REST API."""
+    key = str(settings.get("microsoft_translator_key", "")).strip()
+    if not key:
+        raise TranslationError(
+            "کلید Azure برای Microsoft Translator وارد نشده است. در تنظیمات، ارائه‌دهنده Microsoft Translator "
+            "را انتخاب و کلید منبع Translator را وارد کن."
+        )
+
+    endpoint = str(settings.get(
+        "microsoft_translator_endpoint", "https://api.cognitive.microsofttranslator.com"
+    )).strip()
+    url = _microsoft_translator_url(endpoint)
+    region = str(settings.get("microsoft_translator_region", "")).strip()
+    is_global_endpoint = "api.cognitive.microsofttranslator.com" in url.lower()
+    if not is_global_endpoint and not region:
+        raise TranslationError(
+            "برای منبع منطقه‌ای یا سفارشی Microsoft Translator باید منطقه Azure را وارد کنی؛ "
+            "برای نمونه westeurope. در منبع Global می‌توانی این فیلد را خالی بگذاری."
+        )
+
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/json; charset=UTF-8",
+    }
+    if region:
+        headers["Ocp-Apim-Subscription-Region"] = region
+
+    params = {"api-version": "3.0", "from": "en", "to": "fa"}
+    payload = [{"Text": text}]
+    try:
+        response = requests.post(
+            url,
+            params=params,
+            headers=headers,
+            json=payload,
+            timeout=(5, 25),
+            **_proxy_kwargs(settings),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.HTTPError as exc:
+        response = exc.response
+        status = response.status_code if response is not None else None
+        if status == 401:
+            message = "کلید Microsoft Translator معتبر نیست یا درخواست احراز هویت نشده است؛ کلید Azure را بررسی کن."
+        elif status == 403:
+            message = "دسترسی Microsoft Translator رد شد؛ منطقه منبع، مجوز سرویس و سهمیه Azure را بررسی کن."
+        elif status == 429:
+            retry_after = response.headers.get("Retry-After", "") if response is not None else ""
+            hint = f" زمان اعلام‌شده برای تلاش دوباره: {retry_after} ثانیه." if retry_after.isdigit() else ""
+            message = "محدودیت درخواست یا سهمیه Microsoft Translator رد شده است (HTTP 429)." + hint
+        else:
+            message = f"Microsoft Translator خطای HTTP {status or 'نامشخص'} برگرداند. نشانی Endpoint و تنظیمات Azure را بررسی کن."
+        raise TranslationError(message) from exc
+    except requests.RequestException as exc:
+        raise TranslationError(
+            "اتصال به Microsoft Translator برقرار نشد. اینترنت، Endpoint و تنظیم پروکسی را بررسی کن. "
+            f"جزئیات: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise TranslationError("پاسخ Microsoft Translator قالب JSON معتبر ندارد.") from exc
+
+    try:
+        result = str(data[0]["translations"][0]["text"]).strip()
+    except (IndexError, KeyError, TypeError) as exc:
+        raise TranslationError("پاسخ Microsoft Translator شامل متن ترجمه‌شده معتبر نیست.") from exc
+    if not result:
+        raise TranslationError("Microsoft Translator پاسخ ترجمه خالی برگرداند.")
+    return result
 
 
 def _translate_libretranslate(text: str, settings: dict[str, Any]) -> str:

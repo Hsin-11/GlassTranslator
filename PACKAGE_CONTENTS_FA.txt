@@ -1,4 +1,4 @@
-Glass Translator 0.2.7 — محتوای بستهٔ کامل
+Glass Translator 0.2.10 — محتوای بستهٔ کامل
 
 این پوشه شامل سورس کامل برنامه و ابزارهای نصب/تست/ساخت است.
 - سورس اصلی: main.py, ui.py, translator.py, ocr_worker.py, history.py, config.py

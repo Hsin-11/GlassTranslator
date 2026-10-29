@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
-title Glass Translator 0.2.7 - Windows EXE Builder
+title Glass Translator 0.2.10 - Windows EXE Builder
 for /f "usebackq delims=" %%V in ("%~dp0VERSION") do set "APP_VERSION=%%V"
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 set "ARGOS_SOURCE=%APPDATA%\GlassTranslator\argos-packages"

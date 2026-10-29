@@ -13,6 +13,8 @@ from translator import (
     _normalize_lmstudio_url,
     _translate_google_web,
     _translate_libretranslate,
+    _translate_microsoft_translator,
+    _microsoft_translator_url,
     _translate_local_ai,
     _translate_offline,
     _refresh_argos_language_cache,
@@ -67,6 +69,72 @@ class TranslatorTests(unittest.TestCase):
         self.assertEqual(
             mock_get.call_args.kwargs["proxies"],
             {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"},
+        )
+
+    @patch("translator._translate_microsoft_translator")
+    def test_online_dispatches_to_microsoft_translator(self, mock_microsoft):
+        from translator import _translate_online
+        mock_microsoft.return_value = "سلام"
+        self.assertEqual(
+            _translate_online("Hello", {"online_provider": "microsoft", "microsoft_translator_key": "test"}),
+            "سلام",
+        )
+        mock_microsoft.assert_called_once()
+
+    @patch("translator.requests.post")
+    def test_microsoft_translator_uses_v3_payload_and_global_endpoint(self, mock_post):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = [{"translations": [{"text": "سلام دنیا", "to": "fa"}]}]
+        mock_post.return_value = response
+        settings = {
+            "online_provider": "microsoft",
+            "microsoft_translator_key": "test-secret",
+            "microsoft_translator_endpoint": "https://api.cognitive.microsofttranslator.com",
+        }
+        self.assertEqual(_translate_microsoft_translator("Hello world", settings), "سلام دنیا")
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "https://api.cognitive.microsofttranslator.com/translate")
+        self.assertEqual(kwargs["params"], {"api-version": "3.0", "from": "en", "to": "fa"})
+        self.assertEqual(kwargs["json"], [{"Text": "Hello world"}])
+        self.assertEqual(kwargs["headers"]["Ocp-Apim-Subscription-Key"], "test-secret")
+        self.assertNotIn("Ocp-Apim-Subscription-Region", kwargs["headers"])
+
+    @patch("translator.requests.post")
+    def test_microsoft_translator_adds_region_and_supports_custom_resource_endpoint(self, mock_post):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = [{"translations": [{"text": "سلام"}]}]
+        mock_post.return_value = response
+        settings = {
+            "microsoft_translator_key": "test-secret",
+            "microsoft_translator_endpoint": "https://sample.cognitiveservices.azure.com/translator/text/v3.0/translate?api-version=3.0&from=en&to=fa",
+            "microsoft_translator_region": "westeurope",
+        }
+        self.assertEqual(_translate_microsoft_translator("Hello", settings), "سلام")
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "https://sample.cognitiveservices.azure.com/translator/text/v3.0/translate")
+        self.assertEqual(kwargs["headers"]["Ocp-Apim-Subscription-Region"], "westeurope")
+
+    def test_microsoft_translator_requires_key(self):
+        with self.assertRaisesRegex(TranslationError, "کلید Azure"):
+            _translate_microsoft_translator("Hello", {})
+
+    def test_microsoft_custom_endpoint_requires_region(self):
+        with self.assertRaisesRegex(TranslationError, "منطقه Azure"):
+            _translate_microsoft_translator("Hello", {
+                "microsoft_translator_key": "test-secret",
+                "microsoft_translator_endpoint": "https://sample.cognitiveservices.azure.com",
+            })
+
+    def test_microsoft_translator_endpoint_normalization(self):
+        self.assertEqual(
+            _microsoft_translator_url("https://api.cognitive.microsofttranslator.com"),
+            "https://api.cognitive.microsofttranslator.com/translate",
+        )
+        self.assertEqual(
+            _microsoft_translator_url("https://sample.cognitiveservices.azure.com"),
+            "https://sample.cognitiveservices.azure.com/translator/text/v3.0/translate",
         )
 
     @patch("translator.requests.post")

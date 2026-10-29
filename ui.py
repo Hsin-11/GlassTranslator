@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel as _QtLabel,
     QLineEdit as _QtLineEdit, QMessageBox, QPushButton, QScrollArea, QSizeGrip, QSlider,
-    QSpinBox, QToolButton, QVBoxLayout, QWidget, QStyle, QListWidget, QListWidgetItem,
+    QSpinBox, QToolButton, QVBoxLayout, QWidget, QStyle, QListWidget, QListWidgetItem, QGroupBox,
 )
 
 from config import MODE_NAMES, THEMES
@@ -55,6 +55,8 @@ ICON_PATHS: dict[str, str] = {
     "minus": '<path d="M5 12h14"/>',
     "check": '<path d="m5 12 4 4L19 6"/>',
     "external": '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/>',
+    "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
+    "moon": '<path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z"/>',
 }
 
 
@@ -131,6 +133,7 @@ class FloatingToolbar(QWidget):
     overlay_toggled = Signal()
     history_requested = Signal()
     mode_cycle_requested = Signal()
+    theme_toggled = Signal()
     settings_requested = Signal()
     quit_requested = Signal()
 
@@ -157,6 +160,7 @@ class FloatingToolbar(QWidget):
             ("overlay", "eye", "نمایش پنل ترجمه", self.overlay_toggled),
             ("history", "history", "تاریخچه ترجمه‌ها", self.history_requested),
             ("mode", "languages", "تغییر موتور ترجمه", self.mode_cycle_requested),
+            ("theme", "moon", "تغییر به حالت تاریک", self.theme_toggled),
             ("settings", "settings", "تنظیمات", self.settings_requested),
             ("quit", "x", "خروج از برنامه", self.quit_requested),
         ]
@@ -171,23 +175,14 @@ class FloatingToolbar(QWidget):
         self.settings = settings
         vertical = settings.get("toolbar_orientation") == "vertical"
         self.root_layout.setDirection(QBoxLayout.Direction.LeftToRight if not vertical else QBoxLayout.Direction.TopToBottom)
-        style = str(settings.get("toolbar_style", "light")).lower()
-        if style == "theme":
-            theme = THEMES.get(settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
-            color = theme["text"]
-            bg = theme["toolbar"]
-            button_bg = theme["panel"]
-            hover_bg = theme["separator"]
-            pressed_bg = theme["border"]
-            border = theme["border"]
-        elif style == "dark":
-            color, bg = "#F5F7FA", "#17191D"
-            button_bg, hover_bg, pressed_bg = "#24272D", "#343942", "#454B56"
-            border = "#454A53"
-        else:  # Light mode is the default and remains compatible with old setting value "white".
-            color, bg = "#171717", "#F7F7F4"
-            button_bg, hover_bg, pressed_bg = "#FFFFFF", "#E9E9E5", "#D8D8D2"
-            border = "#D0D0CB"
+        # One application-wide light/dark choice: the floating toolbar never diverges.
+        theme = THEMES.get(settings.get("theme", "روشن"), THEMES["روشن"])
+        color = theme["text"]
+        bg = theme["toolbar"]
+        button_bg = theme["panel"]
+        hover_bg = theme["separator"]
+        pressed_bg = theme["border"]
+        border = theme["border"]
         self.icon_color = color
         radius = max(10, min(22, int(settings.get("corner_radius", 18))))
         self.setStyleSheet(
@@ -210,6 +205,12 @@ class FloatingToolbar(QWidget):
         self.buttons["overlay"].setToolTip("مخفی کردن پنل ترجمه" if self.overlay_visible else "نمایش پنل ترجمه")
         mode = MODE_NAMES.get(self.settings.get("mode", "local"), "Local AI")
         self.buttons["mode"].setToolTip(f"موتور فعلی: {mode} — برای تغییر کلیک کن")
+        dark = self.settings.get("theme", "روشن") == "تاریک"
+        theme_icon = "sun" if dark else "moon"
+        theme_tip = ("تغییر به حالت روشن" if dark else "تغییر به حالت تاریک") + " (Ctrl+Shift+D)"
+        self.buttons["theme"].icon_name = theme_icon
+        self.buttons["theme"].setIcon(icon(theme_icon, color=self.icon_color))
+        self.buttons["theme"].setToolTip(theme_tip)
 
     def set_capture_active(self, active: bool) -> None:
         self.capture_active = active
@@ -250,8 +251,9 @@ class RegionSelector(QWidget):
     region_selected = Signal(dict)
     cancelled = Signal()
 
-    def __init__(self, screen_geometry: QRect, parent: QWidget | None = None) -> None:
+    def __init__(self, screen_geometry: QRect, theme_name: str = "روشن", parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.theme = THEMES.get(theme_name, THEMES["روشن"])
         self.setGeometry(screen_geometry)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setWindowOpacity(1.0)
@@ -274,11 +276,15 @@ class RegionSelector(QWidget):
         if self._origin is not None and self._current is not None:
             rect = QRect(self._origin, self._current).normalized()
             # Bright translucent highlight separates the selected area from the rest of the screen.
+            accent_fill = QColor(self.theme["accent"])
+            accent_fill.setAlpha(52)
+            accent_line = QColor(self.theme["accent"])
+            accent_line.setAlpha(245)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(164, 220, 247, 42))
+            painter.setBrush(accent_fill)
             painter.drawRoundedRect(rect, 7, 7)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(220, 246, 255, 245), 2, Qt.PenStyle.SolidLine))
+            painter.setPen(QPen(accent_line, 2, Qt.PenStyle.SolidLine))
             painter.drawRoundedRect(rect, 7, 7)
             painter.setPen(QPen(QColor(255, 255, 255, 210), 1, Qt.PenStyle.DashLine))
             inset = rect.adjusted(4, 4, -4, -4)
@@ -290,17 +296,21 @@ class RegionSelector(QWidget):
             if rect.width() < 150:
                 label_rect.moveLeft(rect.left())
                 label_rect.moveTop(max(0, rect.top() - 34))
+            label_bg = QColor(self.theme["panel"])
+            label_bg.setAlpha(226)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(20, 28, 34, 210))
+            painter.setBrush(label_bg)
             painter.drawRoundedRect(label_rect, 7, 7)
-            painter.setPen(QColor("#F6FCFF"))
+            painter.setPen(QColor(self.theme["text"]))
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
         else:
             hint = QRect(20, 20, min(max(390, self.width() - 40), 500), 42)
+            hint_bg = QColor(self.theme["panel"])
+            hint_bg.setAlpha(218)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(20, 28, 34, 185))
+            painter.setBrush(hint_bg)
             painter.drawRoundedRect(hint, 10, 10)
-            painter.setPen(QColor("#F6FCFF"))
+            painter.setPen(QColor(self.theme["text"]))
             painter.drawText(hint.adjusted(12, 0, -12, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                              "محدوده متن را با ماوس بکشید   •   Esc برای لغو")
         painter.end()
@@ -479,7 +489,7 @@ class TranslationOverlay(QWidget):
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
         self.settings = settings
-        theme = THEMES.get(settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
+        theme = THEMES.get(settings.get("theme", "روشن"), THEMES["روشن"])
         opacity = max(55, min(100, int(settings.get("opacity", 88))))
         radius = max(8, min(28, int(settings.get("corner_radius", 18))))
         font_size = max(12, min(28, int(settings.get("font_size", 17))))
@@ -528,7 +538,7 @@ class TranslationOverlay(QWidget):
             self.adjustSize()
             self.move(current_pos)
 
-        theme = THEMES.get(self.settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
         name = "chevron-up" if expanded else "chevron-down"
         button.icon_name = name
         button.setIcon(icon(name, theme["text"]))
@@ -606,69 +616,73 @@ class SettingsDialog(QDialog):
         self.settings = settings.copy()
         self.setWindowTitle("تنظیمات مترجم")
         self.setObjectName("settingsDialog")
-        self.setMinimumSize(560, 680)
+        self.setMinimumSize(600, 700)
+        self.resize(700, 790)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._build()
-        self.theme_combo.currentTextChanged.connect(self._apply_theme_style)
-        self.theme_combo.currentTextChanged.connect(self._clear_test_status)
         self.mode_combo.currentIndexChanged.connect(self._clear_test_status)
-        self.online_provider_combo.currentIndexChanged.connect(self._clear_test_status)
+        self.mode_combo.currentIndexChanged.connect(self._update_mode_fields)
         self._apply_theme_style()
+        self._update_mode_fields()
+
+    @staticmethod
+    def _new_form(section: QGroupBox) -> QFormLayout:
+        form = QFormLayout(section)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(18)
+        form.setContentsMargins(14, 16, 14, 12)
+        return form
+
+    @staticmethod
+    def _ltr_field(field: QLineEdit, placeholder: str | None = None) -> QLineEdit:
+        field.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        field.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        if placeholder:
+            field.setPlaceholderText(placeholder)
+        field.setMinimumHeight(34)
+        return field
 
     def _build(self) -> None:
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 12)
+        outer.setSpacing(12)
+
         scroll = QScrollArea(self)
+        scroll.setObjectName("settingsScroll")
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         content.setObjectName("settingsContent")
-        form = QFormLayout(content)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        form.setVerticalSpacing(12)
-        form.setHorizontalSpacing(18)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(4, 4, 10, 8)
+        content_layout.setSpacing(12)
 
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(list(THEMES.keys()))
-        self.theme_combo.setCurrentText(self.settings.get("theme", "Ivory Glass"))
-        form.addRow("تم رنگی", self.theme_combo)
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Local AI · LM Studio", "local")
-        self.mode_combo.addItem("Online · سرویس اینترنتی", "online")
-        self.mode_combo.addItem("Offline · مدل مستقل", "offline")
-        idx = self.mode_combo.findData(self.settings.get("mode", "local"))
-        self.mode_combo.setCurrentIndex(max(0, idx))
-        form.addRow("موتور ترجمه", self.mode_combo)
-
+        # Appearance card
+        appearance = QGroupBox("ظاهر و نوار ابزار", content)
+        form = self._new_form(appearance)
         self.orientation_combo = QComboBox()
         self.orientation_combo.addItem("افقی", "horizontal")
         self.orientation_combo.addItem("عمودی", "vertical")
         idx = self.orientation_combo.findData(self.settings.get("toolbar_orientation", "horizontal"))
         self.orientation_combo.setCurrentIndex(max(0, idx))
-        form.addRow("جهت نوار ابزار", self.orientation_combo)
-
-        self.toolbar_style_combo = QComboBox()
-        self.toolbar_style_combo.addItem("روشن · دکمه روشن و آیکون تیره", "light")
-        self.toolbar_style_combo.addItem("تاریک · دکمه تیره و آیکون روشن", "dark")
-        self.toolbar_style_combo.addItem("هماهنگ با تم برنامه", "theme")
-        saved_toolbar_style = self.settings.get("toolbar_style", "light")
-        if saved_toolbar_style == "white":  # migrate settings saved by v0.2
-            saved_toolbar_style = "light"
-        idx = self.toolbar_style_combo.findData(saved_toolbar_style)
-        self.toolbar_style_combo.setCurrentIndex(max(0, idx))
-        form.addRow("ظاهر نوار ابزار", self.toolbar_style_combo)
+        form.addRow("چیدمان نوار شناور", self.orientation_combo)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(55, 100)
         self.opacity_slider.setValue(int(self.settings.get("opacity", 88)))
         self.opacity_value = QLabel(f"{self.opacity_slider.value()}٪")
+        self.opacity_value.setMinimumWidth(42)
         self.opacity_slider.valueChanged.connect(lambda value: self.opacity_value.setText(f"{value}٪"))
         opacity_wrap = QWidget()
         opacity_layout = QHBoxLayout(opacity_wrap)
         opacity_layout.setContentsMargins(0, 0, 0, 0)
-        opacity_layout.addWidget(self.opacity_slider)
+        opacity_layout.setSpacing(10)
+        opacity_layout.addWidget(self.opacity_slider, 1)
         opacity_layout.addWidget(self.opacity_value)
-        form.addRow("میزان مات‌بودن پنل", opacity_wrap)
+        form.addRow("شفافیت پنل", opacity_wrap)
 
         self.radius_spin = QSpinBox()
         self.radius_spin.setRange(8, 28)
@@ -680,127 +694,174 @@ class SettingsDialog(QDialog):
         self.font_spin.setRange(12, 28)
         self.font_spin.setSuffix(" px")
         self.font_spin.setValue(int(self.settings.get("font_size", 17)))
-        form.addRow("اندازه فونت فارسی", self.font_spin)
+        form.addRow("اندازه فونت ترجمه", self.font_spin)
+        content_layout.addWidget(appearance)
+
+        # OCR card
+        ocr_section = QGroupBox("تشخیص متن (OCR)", content)
+        ocr_form = self._new_form(ocr_section)
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItem("سریع · تأخیر کمتر", "fast")
+        self.profile_combo.addItem("متعادل · پیشنهادشده", "balanced")
+        self.profile_combo.addItem("دقیق · تأیید چندباره", "accurate")
+        profile_index = self.profile_combo.findData(self.settings.get("quality_profile", "balanced"))
+        self.profile_combo.setCurrentIndex(max(0, profile_index))
+        ocr_form.addRow("کیفیت تشخیص", self.profile_combo)
 
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(300, 3000)
         self.interval_spin.setSingleStep(100)
         self.interval_spin.setSuffix(" ms")
         self.interval_spin.setValue(int(self.settings.get("scan_interval_ms", 700)))
-        form.addRow("فاصله بررسی OCR", self.interval_spin)
-
-        self.profile_combo = QComboBox()
-        self.profile_combo.addItem("سریع · کمترین تأخیر", "fast")
-        self.profile_combo.addItem("متعادل · پیشنهاد اولیه", "balanced")
-        self.profile_combo.addItem("دقیق · تأیید چندباره متن", "accurate")
-        profile_index = self.profile_combo.findData(self.settings.get("quality_profile", "balanced"))
-        self.profile_combo.setCurrentIndex(max(0, profile_index))
-        form.addRow("پروفایل OCR", self.profile_combo)
+        ocr_form.addRow("فاصله اسکن", self.interval_spin)
 
         self.stable_spin = QSpinBox()
         self.stable_spin.setRange(1, 5)
         self.stable_spin.setValue(int(self.settings.get("stable_reads", 2)))
-        form.addRow("تعداد خواندن پایدار برای تأیید", self.stable_spin)
-
+        ocr_form.addRow("دفعات تأیید متن", self.stable_spin)
         self.profile_combo.currentIndexChanged.connect(self._apply_quality_profile)
+        content_layout.addWidget(ocr_section)
 
-        glossary_button = QPushButton("مدیریت واژه‌نامه و اصطلاحات…")
-        glossary_button.clicked.connect(self._open_glossary)
-        form.addRow("واژه‌نامه بازی", glossary_button)
+        # Translation card
+        translation_section = QGroupBox("موتور ترجمه", content)
+        translation_form = self._new_form(translation_section)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("هوش مصنوعی محلی · LM Studio", "local")
+        self.mode_combo.addItem("آنلاین · Google Translate", "online")
+        self.mode_combo.addItem("آفلاین · مدل نصب‌شده", "offline")
+        idx = self.mode_combo.findData(self.settings.get("mode", "local"))
+        self.mode_combo.setCurrentIndex(max(0, idx))
+        translation_form.addRow("روش ترجمه", self.mode_combo)
 
-        self.persistent_history = QCheckBox("ذخیره تاریخچه برای اجرای بعدی برنامه")
-        self.persistent_history.setChecked(bool(self.settings.get("history_persistent", False)))
-        form.addRow("حریم خصوصی", self.persistent_history)
+        self.google_service_label = QLabel("Google Translate · بدون نیاز به کلید API")
+        self.google_service_label.setObjectName("secondaryInfo")
+        translation_form.addRow("سرویس آنلاین", self.google_service_label)
 
-        self.online_provider_combo = QComboBox()
-        self.online_provider_combo.addItem("Google Translate · بدون کلید API", "google")
-        self.online_provider_combo.addItem("LibreTranslate · سرویس با نشانی API", "libretranslate")
-        provider_index = self.online_provider_combo.findData(self.settings.get("online_provider", "google"))
-        self.online_provider_combo.setCurrentIndex(max(0, provider_index))
-        form.addRow("ارائه‌دهنده آنلاین", self.online_provider_combo)
-
-        self.online_url = QLineEdit(str(self.settings.get("libretranslate_url", "")))
-        self.online_url.setPlaceholderText("https://your-libretranslate-server/translate")
-        self.online_url.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.online_url.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        form.addRow("نشانی API برای LibreTranslate", self.online_url)
-
-        self.online_key = QLineEdit(str(self.settings.get("libretranslate_api_key", "")))
-        self.online_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.online_key.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.online_key.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.online_key.setPlaceholderText("اختیاری")
-        form.addRow("کلید API آنلاین", self.online_key)
-
-        self.online_proxy = QLineEdit(str(self.settings.get("online_proxy", "")))
-        self.online_proxy.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.online_proxy.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.online_proxy.setPlaceholderText("اختیاری؛ برای نمونه http://127.0.0.1:7890")
-        form.addRow("پروکسی HTTP/HTTPS (اختیاری)", self.online_proxy)
-
-        self.lmstudio_url = QLineEdit(str(self.settings.get("lmstudio_base_url", "http://127.0.0.1:1234/v1")))
-        self.lmstudio_url.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.lmstudio_url.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        form.addRow("نشانی LM Studio", self.lmstudio_url)
-
-        self.lmstudio_model = QLineEdit(str(self.settings.get("lmstudio_model", "")))
-        self.lmstudio_model.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.lmstudio_model.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.lmstudio_model.setPlaceholderText("خالی باشد: مدل بارگذاری‌شده خودکار انتخاب می‌شود")
-        form.addRow("شناسه مدل (اختیاری)", self.lmstudio_model)
-
-        note = QLabel(
-            "Google Translate در این برنامه از رابط وب بدون کلید استفاده می‌کند و ممکن است در برخی شبکه‌ها محدود شود. "
-            "در صورت نیاز، پروکسی HTTP/HTTPS را در کادر مربوط وارد کن. LibreTranslate به نشانی سرویس قابل‌دسترسی "
-            "(و گاهی کلید API) نیاز دارد. Local AI زمانی کار می‌کند که "
-            "مدل در LM Studio بارگذاری و Local Server روشن باشد. Offline به بسته زبان نصب‌شده نیاز دارد."
+        self.online_proxy = self._ltr_field(
+            QLineEdit(str(self.settings.get("online_proxy", ""))),
+            "اختیاری؛ مثال: http://127.0.0.1:7890",
         )
-        note.setWordWrap(True)
-        note.setStyleSheet("padding: 6px; background: transparent; border: 0;")
-        form.addRow(note)
+        translation_form.addRow("پروکسی اینترنت", self.online_proxy)
+
+        self.lmstudio_url = self._ltr_field(
+            QLineEdit(str(self.settings.get("lmstudio_base_url", "http://127.0.0.1:1234/v1")))
+        )
+        translation_form.addRow("نشانی LM Studio", self.lmstudio_url)
+
+        self.lmstudio_model = self._ltr_field(
+            QLineEdit(str(self.settings.get("lmstudio_model", ""))),
+            "خالی بماند تا مدل بارگذاری‌شده خودکار انتخاب شود",
+        )
+        translation_form.addRow("شناسه مدل (اختیاری)", self.lmstudio_model)
+
+        self.engine_note = QLabel()
+        self.engine_note.setObjectName("secondaryInfo")
+        self.engine_note.setWordWrap(True)
+        translation_form.addRow(self.engine_note)
 
         self.test_connection_button = QPushButton("آزمایش اتصال موتور انتخاب‌شده")
+        self.test_connection_button.setObjectName("primaryActionButton")
         self.test_connection_button.clicked.connect(self._request_connection_test)
-        form.addRow(self.test_connection_button)
-        self.test_status_label = QLabel("آزمایش اتصال، یک عبارت کوتاه را ترجمه می‌کند و چیزی به تاریخچه اضافه نمی‌کند.")
+        translation_form.addRow(self.test_connection_button)
+        self.test_status_label = QLabel("برای بررسی دسترسی موتور انتخاب‌شده، آزمایش اتصال را اجرا کن.")
         self.test_status_label.setWordWrap(True)
         self.test_status_label.setObjectName("connectionTestStatus")
-        form.addRow(self.test_status_label)
+        translation_form.addRow(self.test_status_label)
+        content_layout.addWidget(translation_section)
+
+        # Privacy and glossary card
+        library_section = QGroupBox("واژه‌نامه و حریم خصوصی", content)
+        library_form = self._new_form(library_section)
+        glossary_button = QPushButton("مدیریت واژه‌نامه و اصطلاحات")
+        glossary_button.clicked.connect(self._open_glossary)
+        library_form.addRow("واژه‌نامه", glossary_button)
+        self.persistent_history = QCheckBox("ذخیره تاریخچه برای اجرای بعدی برنامه")
+        self.persistent_history.setChecked(bool(self.settings.get("history_persistent", False)))
+        library_form.addRow("تاریخچه", self.persistent_history)
+        content_layout.addWidget(library_section)
+
+        content_layout.addStretch(1)
         scroll.setWidget(content)
-        outer.addWidget(scroll)
+        outer.addWidget(scroll, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Save).setText("ذخیره تنظیمات")
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        save_button.setText("ذخیره تنظیمات")
+        save_button.setObjectName("primaryActionButton")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("لغو")
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
+    def _update_mode_fields(self, *_args) -> None:
+        """Show only the settings relevant to the selected translation mode."""
+        mode = str(self.mode_combo.currentData() or "local")
+        groups = {
+            "online": [self.google_service_label, self.online_proxy],
+            "local": [self.lmstudio_url, self.lmstudio_model],
+        }
+        for mode_name, widgets in groups.items():
+            visible = mode == mode_name
+            for widget in widgets:
+                widget.setVisible(visible)
+                # QFormLayout controls its own labels; retrieve the field label using
+                # the section's layout so hidden optional fields do not leave blank rows.
+                for box in self.findChildren(QGroupBox):
+                    form = box.layout()
+                    if isinstance(form, QFormLayout):
+                        field_label = form.labelForField(widget)
+                        if field_label is not None:
+                            field_label.setVisible(visible)
+        mode_messages = {
+            "online": "برای ترجمه آنلاین به اینترنت نیاز است؛ این برنامه فقط از Google Translate استفاده می‌کند.",
+            "local": "LM Studio را اجرا کن و Local Server را فعال نگه دار.",
+            "offline": "برای ترجمه بدون اینترنت، بسته زبان آفلاین باید نصب شده باشد.",
+        }
+        self.engine_note.setText(mode_messages.get(mode, mode_messages["local"]))
+
     def _apply_theme_style(self, *_args) -> None:
-        theme = THEMES.get(self.theme_combo.currentText(), THEMES["Ivory Glass"])
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
         self.setStyleSheet(f"""
             QDialog#settingsDialog {{ background: {theme['background']}; color: {theme['text']}; }}
-            QWidget {{ color: {theme['text']}; }}
-            QWidget#settingsContent {{ background: {theme['background']}; color: {theme['text']}; }}
+            QWidget#settingsContent {{ background: transparent; color: {theme['text']}; }}
+            QGroupBox {{
+                color: {theme['text']}; background: {theme['panel']};
+                border: 1px solid {theme['border']}; border-radius: 12px;
+                margin-top: 12px; padding: 12px 8px 8px 8px; font-weight: 600;
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top right; right: 14px; padding: 0 6px; }}
             QLabel {{ color: {theme['text']}; background: transparent; }}
-            QLineEdit, QComboBox, QSpinBox, QAbstractSpinBox {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; border-radius: 7px; padding: 5px; selection-background-color: {theme['separator']}; selection-color: {theme['text']}; }}
-            QComboBox QAbstractItemView {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; selection-background-color: {theme['separator']}; selection-color: {theme['text']}; outline: 0; }}
+            QLabel#secondaryInfo {{ color: {theme['muted']}; font-weight: 400; padding: 3px 1px; }}
+            QLineEdit, QComboBox, QSpinBox, QAbstractSpinBox {{
+                background: {theme['background']}; color: {theme['text']};
+                border: 1px solid {theme['border']}; border-radius: 8px;
+                padding: 7px 9px; min-height: 20px; selection-background-color: {theme['accent']};
+                selection-color: #FFFFFF;
+            }}
+            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QAbstractSpinBox:focus {{ border: 1px solid {theme['accent']}; }}
+            QComboBox::drop-down {{ border: 0; width: 24px; }}
+            QComboBox QAbstractItemView {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; selection-background-color: {theme['accent']}; selection-color: #FFFFFF; outline: 0; padding: 4px; }}
             QCheckBox {{ color: {theme['text']}; spacing: 8px; }}
-            QPushButton {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; border-radius: 8px; padding: 7px 11px; }}
-            QPushButton:hover {{ background: {theme['separator']}; color: {theme['text']}; }}
+            QPushButton {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; border-radius: 8px; padding: 9px 13px; min-height: 20px; }}
+            QPushButton:hover {{ background: {theme['separator']}; border-color: {theme['accent']}; }}
+            QPushButton#primaryActionButton {{ background: {theme['accent']}; color: {'#FFFFFF' if self.settings.get('theme', 'روشن') == 'روشن' else '#171A20'}; border: 1px solid {theme['accent']}; font-weight: 600; }}
+            QPushButton#primaryActionButton:hover {{ background: {theme['accent']}; border-color: {theme['accent']}; }}
             QDialogButtonBox {{ color: {theme['text']}; }}
-            QScrollArea {{ background: {theme['background']}; border: 0; }}
+            QScrollArea#settingsScroll {{ background: transparent; border: 0; }}
+            QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+            QScrollBar::handle:vertical {{ background: {theme['border']}; border-radius: 4px; min-height: 24px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
             QSlider::groove:horizontal {{ height: 4px; background: {theme['separator']}; border-radius: 2px; }}
             QSlider::handle:horizontal {{ background: {theme['accent']}; width: 14px; margin: -5px 0; border-radius: 7px; }}
-            QToolTip {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; }}
-            QLabel#connectionTestStatus {{ color: {theme['muted']}; padding: 5px; }}
+            QToolTip {{ background: {theme['panel']}; color: {theme['text']}; border: 1px solid {theme['border']}; padding: 5px; }}
+            QLabel#connectionTestStatus {{ color: {theme['muted']}; padding: 5px 1px; }}
         """)
 
     def _clear_test_status(self, *_args) -> None:
         """Remove a stale connection/test result when the selected engine changes."""
-        theme = THEMES.get(self.theme_combo.currentText(), THEMES["Ivory Glass"])
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
         self.test_status_label.setText(
-            "موتور تغییر کرد؛ برای دیدن وضعیت جدید، «آزمایش اتصال موتور انتخاب‌شده» را بزن."
+            "تنظیمات تغییر کرد؛ برای بررسی وضعیت جدید، «آزمایش اتصال موتور انتخاب‌شده» را بزن."
         )
         self.test_status_label.setStyleSheet(
             f"color: {theme['muted']}; padding: 5px; background: transparent; border: 0;"
@@ -815,18 +876,17 @@ class SettingsDialog(QDialog):
 
     def show_test_result(self, message: str, success: bool) -> None:
         self.test_status_label.setText(("✓  " if success else "✕  ") + message)
-        theme = THEMES.get(self.theme_combo.currentText(), THEMES["Ivory Glass"])
-        status_color = "#2E8B57" if success else ("#FF9A9A" if theme["text"].startswith("#F") or theme["text"].startswith("#E") else "#B42318")
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
+        status_color = ("#2E8B57" if self.settings.get("theme", "روشن") == "روشن" else "#74D69A") if success else ("#FF8D8D" if self.settings.get("theme", "روشن") == "تاریک" else "#B42318")
         self.test_status_label.setStyleSheet(f"color: {status_color}; padding: 5px; background: transparent; border: 0;")
         self.test_connection_button.setEnabled(True)
 
     def current_settings(self) -> dict[str, Any]:
         settings = self.settings.copy()
         settings.update({
-            "theme": self.theme_combo.currentText(),
             "mode": self.mode_combo.currentData(),
             "toolbar_orientation": self.orientation_combo.currentData(),
-            "toolbar_style": self.toolbar_style_combo.currentData(),
+            "toolbar_style": "theme",
             "opacity": self.opacity_slider.value(),
             "corner_radius": self.radius_spin.value(),
             "font_size": self.font_spin.value(),
@@ -834,9 +894,7 @@ class SettingsDialog(QDialog):
             "stable_reads": self.stable_spin.value(),
             "quality_profile": self.profile_combo.currentData(),
             "history_persistent": self.persistent_history.isChecked(),
-            "online_provider": self.online_provider_combo.currentData(),
-            "libretranslate_url": self.online_url.text().strip(),
-            "libretranslate_api_key": self.online_key.text().strip(),
+            "online_provider": "google",
             "online_proxy": self.online_proxy.text().strip(),
             "lmstudio_base_url": self.lmstudio_url.text().strip().rstrip("/"),
             "lmstudio_model": self.lmstudio_model.text().strip(),
@@ -857,7 +915,6 @@ class SettingsDialog(QDialog):
 
     def _open_glossary(self) -> None:
         glossary_settings = self.settings.copy()
-        glossary_settings["theme"] = self.theme_combo.currentText()
         dialog = GlossaryDialog(self.settings.get("glossary", {}), glossary_settings, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.settings["glossary"] = dialog.terms.copy()
@@ -884,7 +941,7 @@ class HistoryDialog(QDialog):
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
         self.settings = settings.copy()
-        theme = THEMES.get(self.settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
         self.setStyleSheet(f"""
             QDialog#historyDialog {{ background: {theme['background']}; color: {theme['text']}; }}
             QLabel {{ color: {theme['text']}; }}
@@ -945,7 +1002,7 @@ class HistoryDialog(QDialog):
         if not matched:
             empty = QLabel("هنوز ترجمه‌ای ثبت نشده است." if not query else "نتیجه‌ای پیدا نشد.")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            theme = THEMES.get(self.settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
+            theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
             empty.setStyleSheet(f"color: {theme['muted']}; padding: 30px; background: transparent; border: 0;")
             self.cards_layout.addWidget(empty)
         else:
@@ -956,7 +1013,7 @@ class HistoryDialog(QDialog):
     def _make_card(self, entry: dict[str, Any]) -> QWidget:
         card = QFrame()
         card.setObjectName("historyCard")
-        theme = THEMES.get(self.settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
         card.setStyleSheet(f"QFrame#historyCard {{ border: 1px solid {theme['border']}; border-radius: 12px; background: {theme['panel']}; color: {theme['text']}; }}")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(13, 11, 13, 11)
@@ -1065,7 +1122,7 @@ class GlossaryDialog(QDialog):
         self._refresh()
 
     def _apply_theme_style(self) -> None:
-        theme = THEMES.get(self.settings.get("theme", "Ivory Glass"), THEMES["Ivory Glass"])
+        theme = THEMES.get(self.settings.get("theme", "روشن"), THEMES["روشن"])
         self.setStyleSheet(f"""
             QDialog#glossaryDialog {{ background: {theme['background']}; color: {theme['text']}; }}
             QLabel {{ color: {theme['text']}; }}
